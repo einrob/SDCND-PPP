@@ -27,6 +27,7 @@ public:
 	Trajectory()
 	{
 		timesteps_ = 0;
+		trajectory_cost_ = 0.0;
 	}
 
 	void setXYSD(vector<double> _x, vector<double> _y, vector<double> _s, vector<double> _d)
@@ -68,9 +69,10 @@ public:
 	vector<double> d_;
 	unsigned int timesteps_;
 
-	tk::spline sp;
+	tk::spline sp_;
 	vector<double> control_points_;
 
+	double trajectory_cost_;
 
 
 };
@@ -155,13 +157,13 @@ public:
 		d_pos_ =_d_pos;
 		lane_ = floor(d_pos_/4);
 		object_speed_ = sqrt(vx_*vx_+vy_*vy_);
-		car_future_s_ = 0;
+		object_future_s_ = 0;
 	};
 
 	void estimateTrajectory(int timesteps)
 	{
-		 car_future_s_ = s_pos_; // current s position
-		car_future_s_+=((double)timesteps*0.02*object_speed_);
+		object_future_s_ = s_pos_; // current s position
+		object_future_s_+=((double)timesteps*0.02*object_speed_);
 	}
 
 	int id_;
@@ -171,21 +173,22 @@ public:
 	double s_pos_;
 	double d_pos_;
 	double object_speed_;
-	double car_future_s_;
+	double object_future_s_;
 
 	double x_;
 	double y_;
 };
 
 
-class EnvirmonmentModel
+class EgoPlanner
 {
 public:
-	EnvirmonmentModel(vector<double> _map_waypoints_x,
+	EgoPlanner(vector<double> _map_waypoints_x,
 					  vector<double> _map_waypoints_y,
 					  vector<double> _map_waypoints_s,
 					  vector<double> _map_waypoints_dx,
-					  vector<double> _map_waypoints_dy)
+					  vector<double> _map_waypoints_dy,
+					  unsigned int _max_planning_timesteps)
 	{
 
 		map_waypoints_x_  = _map_waypoints_x;
@@ -193,46 +196,56 @@ public:
 		map_waypoints_s_  = _map_waypoints_s;
 		map_waypoints_dx_ = _map_waypoints_dx;
 		map_waypoints_dy_ = _map_waypoints_dy;
+		max_planning_timesteps_ = _max_planning_timesteps;
 	}
 
 	void updateEgoState()
 	{
 		bool too_close = false;
 
-		for(unsigned int i=0; i < sensor_objects_.size(); i++)
+		for(unsigned trajectory_index = 0; trajectory_index < ego_car_.ego_trajectories_.size(); trajectory_index++)
 		{
 
-			if(sensor_objects_[i].lane_ == ego_car_.lane_)
+
+			for(unsigned int i=0; i < sensor_objects_.size(); i++)
 			{
+				if(sensor_objects_[i].lane_ == ego_car_.lane_)
+				{
 
-				 // check s values grater than mine and s gap
-				 if((sensor_objects_[i].car_future_s_ > ego_car_.car_s_) && ((sensor_objects_[i].car_future_s_ - ego_car_.car_s_) < 30))
-				 {
-					 too_close = true;
 
-					 if(ego_car_.lane_ > 0)
+					 // check s values grater than mine and s gap
+					 if((sensor_objects_[i].object_future_s_ > ego_car_.car_s_) && ((sensor_objects_[i].object_future_s_ - ego_car_.car_s_) < 30))
 					 {
-						ego_car_.lane_ = 0;
-					 }
+						 too_close = true;
 
-				 }
+						 if(ego_car_.lane_ > 0)
+						 {
+							ego_car_.lane_ = 0;
+						 }
+
+					 }
+				}
+
 			}
 
-		}
 
-		  if(too_close)
-		  {
-			  ego_car_.ref_speed_ -= 0.624;
-		  }
-		  else
-		  {
-			  if(ego_car_.ref_speed_ < 49.5)
+
+
+
+
+			  if(too_close)
 			  {
-				  ego_car_.ref_speed_ += 0.624;
-
+				  ego_car_.ref_speed_ -= 0.624;
 			  }
-		  }
+			  else
+			  {
+				  if(ego_car_.ref_speed_ < 49.5)
+				  {
+					  ego_car_.ref_speed_ += 0.624;
 
+				  }
+			  }
+		}
 	}
 
 	void generateObjectTrajectories()
@@ -247,143 +260,150 @@ public:
 	{
 
 
-		  vector<double> ptsx; // control points
-		  vector<double> ptsy; // control points
+		  vector<double> control_points_x; // control points
+		  vector<double> control_points_y; // control points
 
+		  // temporary local reference coordinate system
 		  double ref_x = ego_car_.car_x_;
 		  double ref_y = ego_car_.car_y_;
 		  double ref_yaw = deg2rad(ego_car_.car_yaw_);
 
-
-		  Trajectory keep_lane;
 		  ego_car_.ego_trajectories_.clear();
-		  ego_car_.ego_trajectories_.push_back(keep_lane);
 
-		  // If therer are not enough points in the previous path
-		  // I need to calculate the position of the car at a previous timestep
-		  // --> This position is estimated behind the car in the last know orientation
-		  // of the car
-		  // --> Two points as starting control points are neccessary to force the
-		  // estimated splien into the last know direction of the car
-		  // --> This keeps the trajectory smooth
 
-		  if(ego_car_.prev_path_size_ < 2)
+		  // Generate 3 trajectories: keep_lane, change left, change right, or change right right/change left left
+		  for(int lane = 0; lane < 3; lane++)
 		  {
-			  double prev_car_x = ego_car_.car_x_ - cos(ego_car_.car_yaw_);
-			  double prev_car_y = ego_car_.car_y_ - sin(ego_car_.car_yaw_);
+
+			  Trajectory temp_lane = Trajectory();
+			  ego_car_.ego_trajectories_.push_back(temp_lane);
+
+			  // If therer are not enough points in the previous path
+			  // I need to calculate the position of the car at a previous timestep
+			  // --> This position is estimated behind the car in the last know orientation
+			  // of the car
+			  // --> Two points as starting control points are neccessary to force the
+			  // estimated splien into the last know direction of the car
+			  // --> This keeps the trajectory smooth
+
+			  if(ego_car_.prev_path_size_ < 2)
+			  {
+				  double prev_car_x = ego_car_.car_x_ - cos(ego_car_.car_yaw_);
+				  double prev_car_y = ego_car_.car_y_ - sin(ego_car_.car_yaw_);
+
+				  control_points_x.push_back(prev_car_x);
+				  control_points_x.push_back(ego_car_.car_x_);
+
+				  control_points_y.push_back(prev_car_y);
+				  control_points_y.push_back(ego_car_.car_y_);
+			  }
+			  else
+			  {
+				  ref_x = ego_car_.prev_path_x_[ego_car_.prev_path_size_ -1];
+				  ref_y = ego_car_.prev_path_y_[ego_car_.prev_path_size_ -1];
+
+				  double ref_x_prev = ego_car_.prev_path_x_[ego_car_.prev_path_size_ -2];
+				  double ref_y_prev = ego_car_.prev_path_y_[ego_car_.prev_path_size_ -2];
+
+				  ref_yaw = atan2(ref_y-ref_y_prev,ref_x-ref_x_prev);
+
+				  control_points_x.push_back(ref_x_prev);
+				  control_points_x.push_back(ref_x);
+
+				  control_points_y.push_back(ref_y_prev);
+				  control_points_y.push_back(ref_y);
+			  }
 
 
+			  // In Frenet add evenly 30m spaced points ahead of the starting reference
+			  vector<double> next_wp0 = getXY(ego_car_.car_s_+30,(2+4*ego_car_.lane_),map_waypoints_s_, map_waypoints_x_,map_waypoints_y_);
+			  vector<double> next_wp1 = getXY(ego_car_.car_s_+60,(2+4*ego_car_.lane_),map_waypoints_s_, map_waypoints_x_,map_waypoints_y_);
+			  vector<double> next_wp2 = getXY(ego_car_.car_s_+90,(2+4*ego_car_.lane_),map_waypoints_s_, map_waypoints_x_,map_waypoints_y_);
 
-			  ptsx.push_back(prev_car_x);
-			  ptsx.push_back(ego_car_.car_x_);
+			  control_points_x.push_back(next_wp0[0]);
+			  control_points_x.push_back(next_wp1[0]);
+			  control_points_x.push_back(next_wp2[0]);
 
-			  ptsy.push_back(prev_car_y);
-			  ptsy.push_back(ego_car_.car_y_);
-		  }
-		  else
-		  {
-			  ref_x = ego_car_.prev_path_x_[ego_car_.prev_path_size_ -1];
-			  ref_y = ego_car_.prev_path_y_[ego_car_.prev_path_size_ -1];
+			  control_points_y.push_back(next_wp0[1]);
+			  control_points_y.push_back(next_wp1[1]);
+			  control_points_y.push_back(next_wp2[1]);
 
-			  double ref_x_prev = ego_car_.prev_path_x_[ego_car_.prev_path_size_ -2];
-			  double ref_y_prev = ego_car_.prev_path_y_[ego_car_.prev_path_size_ -2];
+			  for(int i=0; i < control_points_x.size(); i++)
+			  {
+				  // shift car reference angel to 0 degrees
+				  double shift_x = control_points_x[i]-ref_x;
+				  double shift_y = control_points_y[i]-ref_y;
 
-			  ref_yaw = atan2(ref_y-ref_y_prev,ref_x-ref_x_prev);
+				  control_points_x[i] = (shift_x * cos(0-ref_yaw)-shift_y*sin(0-ref_yaw));
+				  control_points_y[i] = (shift_x * sin(0-ref_yaw)+shift_y*cos(0-ref_yaw));
 
-			  ptsx.push_back(ref_x_prev);
-			  ptsx.push_back(ref_x);
+			  }
 
-			  ptsy.push_back(ref_y_prev);
-			  ptsy.push_back(ref_y);
-		  }
-
-
-		  // In Frenet add evenly 30m spaced points ahead of the starting reference
-		  vector<double> next_wp0 = getXY(ego_car_.car_s_+30,(2+4*ego_car_.lane_),map_waypoints_s_, map_waypoints_x_,map_waypoints_y_);
-		  vector<double> next_wp1 = getXY(ego_car_.car_s_+60,(2+4*ego_car_.lane_),map_waypoints_s_, map_waypoints_x_,map_waypoints_y_);
-		  vector<double> next_wp2 = getXY(ego_car_.car_s_+90,(2+4*ego_car_.lane_),map_waypoints_s_, map_waypoints_x_,map_waypoints_y_);
-
-		  ptsx.push_back(next_wp0[0]);
-		  ptsx.push_back(next_wp1[0]);
-		  ptsx.push_back(next_wp2[0]);
-
-		  ptsy.push_back(next_wp0[1]);
-		  ptsy.push_back(next_wp1[1]);
-		  ptsy.push_back(next_wp2[1]);
-
-		  for(int i=0; i < ptsx.size(); i++)
-		  {
-			  // shift car reference angel to 0 degrees
-			  double shift_x = ptsx[i]-ref_x;
-			  double shift_y = ptsy[i]-ref_y;
-
-			  ptsx[i] = (shift_x * cos(0-ref_yaw)-shift_y*sin(0-ref_yaw));
-			  ptsy[i] = (shift_x * sin(0-ref_yaw)+shift_y*cos(0-ref_yaw));
-
-		  }
-
-		  // create a spline
-		  tk::spline s;
-
-		  // set (x,y) points to the spline
-		  s.set_points(ptsx,ptsy);
-
-//          std::cout << "------ previous path points" << std::endl;
-		  for(int i=0; i < ego_car_.prev_path_size_; i++)
-		  {
-//        	  std::cout << "X: " << previous_path_x[i] << " Y: " <<previous_path_y[i] << std::endl;
-
-			  ego_car_.ego_trajectories_[0].x_.push_back(ego_car_.prev_path_x_[i]);
-			  ego_car_.ego_trajectories_[0].y_.push_back(ego_car_.prev_path_y_[i]);
-
-			 // next_x_vals.push_back(ego_car_.prev_path_x_[i]);
-			  //next_y_vals.push_back(ego_car_.prev_path_y_[i]);
-		  }
-
-		  // Calculate how to break up spline points so that we travel at our desired reference velocity
-
-		  double target_x = 30.0;
-		  double target_y = s(target_x);
-		  double target_dist = sqrt((target_x)*(target_x)+(target_y)*(target_y));
-
-		  double x_add_on = 0;
-
-		  // Fill up the rest of our path planner after filling it with prevous points, here we will alway output 50 points
-
-//          std::cout << "--------------- interpolating spline:" << std::endl;
-		  for(int i=1; i<=50-ego_car_.prev_path_size_; i++)
-		  {
-			  double N = (target_dist/(.02*(ego_car_.ref_speed_/2.24)));
-			  double x_point = x_add_on+(target_x)/N;
-			  double y_point = s(x_point);
+			  // create a spline
+			  //tk::spline s;
 
 
-//        	  std::cout << "X: " << x_point << " Y: " << y_point << std::endl;
+			  // set (x,y) points to the spline
+			  std::cout << "Num control poijnts: " << control_points_x.size() << std::endl;
 
-			  x_add_on = x_point;
+			  ego_car_.ego_trajectories_[lane].sp_.set_points(control_points_x, control_points_y);
 
-			  double x_ref = x_point;
-			  double y_ref = y_point;
+			  //s.set_points(ptsx,ptsy);
 
-			  x_point = (x_ref * cos(ref_yaw)-y_ref*sin(ref_yaw));
-			  y_point = (x_ref * sin(ref_yaw)+y_ref*cos(ref_yaw));
+	//          std::cout << "------ previous path points" << std::endl;
+			  for(int i=0; i < ego_car_.prev_path_size_; i++)
+			  {
+	//        	  std::cout << "X: " << previous_path_x[i] << " Y: " <<previous_path_y[i] << std::endl;
 
-			  x_point = x_point + ref_x;
-			  y_point = y_point + ref_y;
+				  ego_car_.ego_trajectories_[lane].x_.push_back(ego_car_.prev_path_x_[i]);
+				  ego_car_.ego_trajectories_[lane].y_.push_back(ego_car_.prev_path_y_[i]);
+			  }
+
+			  // Calculate how to break up spline points so that we travel at our desired reference velocity
+
+			  double target_x = 30.0;
+			  double target_y = ego_car_.ego_trajectories_[0].sp_(target_x);
+			  double target_dist = sqrt((target_x)*(target_x)+(target_y)*(target_y));
+
+			  double x_add_on = 0;
+
+			  // Fill up the rest of our path planner after filling it with prevous points, here we will alway output 50 points
+
+	//          std::cout << "--------------- interpolating spline:" << std::endl;
+			  for(int i=1; i<=max_planning_timesteps_-ego_car_.prev_path_size_; i++)
+			  {
+				  double N = (target_dist/(.02*(ego_car_.ref_speed_/2.24)));
+				  double x_point = x_add_on+(target_x)/N;
+				  double y_point = ego_car_.ego_trajectories_[0].sp_(x_point);
 
 
-			  ego_car_.ego_trajectories_[0].x_.push_back(x_point);
-			  ego_car_.ego_trajectories_[0].y_.push_back(y_point);
+	//        	  std::cout << "X: " << x_point << " Y: " << y_point << std::endl;
 
-			//  next_x_vals.push_back(x_point);
-			//  next_y_vals.push_back(y_point);
+				  x_add_on = x_point;
 
+				  double x_ref = x_point;
+				  double y_ref = y_point;
+
+				  x_point = (x_ref * cos(ref_yaw)-y_ref*sin(ref_yaw));
+				  y_point = (x_ref * sin(ref_yaw)+y_ref*cos(ref_yaw));
+
+				  x_point = x_point + ref_x;
+				  y_point = y_point + ref_y;
+
+
+				  ego_car_.ego_trajectories_[lane].x_.push_back(x_point);
+				  ego_car_.ego_trajectories_[lane].y_.push_back(y_point);
+			  }
+
+			  control_points_x.clear();
+			  control_points_y.clear();
 		  }
 
 	}
 
 	vector<Object> sensor_objects_;
 	EgoCar ego_car_;
+	unsigned int max_planning_timesteps_;
 
 private:
 
@@ -455,7 +475,7 @@ int main() {
   }
 
 
-  EnvirmonmentModel ego_environment(map_waypoints_x, map_waypoints_y, map_waypoints_s, map_waypoints_dx, map_waypoints_dy);
+  EgoPlanner ego_environment(map_waypoints_x, map_waypoints_y, map_waypoints_s, map_waypoints_dx, map_waypoints_dy, 50);
   ego_environment.ego_car_.setEgoLane(1); // We know that we start in lane 1
   ego_environment.ego_car_.ref_speed_ = 49.5;
 
@@ -508,11 +528,6 @@ int main() {
 
           // Add Objects to new enviroment
 
-
-
-
-
-
           int lane = ego_environment.ego_car_.lane_;
           double ref_vel; // m/s
           int prev_size = previous_path_x.size();
@@ -552,51 +567,8 @@ int main() {
 									   sensor_fusion[i][6]);
 
 			  ego_environment.sensor_objects_.push_back(tmp_sensor_object);
-//
-//			  float d = sensor_fusion[i][6];
-//
-//			  // Check if car is im my lane
-//			  if(d< (2+4*ego_environment.ego_car_.lane_+2) && d > (2+4*ego_environment.ego_car_.lane_-2))
-//			  {
-//				  double vx = sensor_fusion[i][3];
-//				  double vy = sensor_fusion[i][4];
-//				  double check_speed = sqrt(vx*vx+vy*vy);
-//				  double check_car_s = sensor_fusion[i][5];
-//
-//
-//
-//				  check_car_s+=((double)prev_size*0.02*check_speed);
-//
-//				  // check s values grater than mine and s gap
-//				  	 if((check_car_s > car_s) && ((check_car_s -car_s) < 30))
-//				  	 {
-//				  		 too_close = true;
-//
-//				  		 if(ego_environment.ego_car_.lane_ > 0)
-//				  		 {
-//				  			ego_environment.ego_car_.lane_ = 0;
-//				  		 }
-//
-//				  	 }
-//
-//
-//			  }
+
 		  }
-
-//
-//		  if(too_close)
-//		  {
-//			  ego_environment.ego_car_.ref_speed_ -= 0.624;
-//		  }
-//		  else
-//		  {
-//			  if(ego_environment.ego_car_.ref_speed_ < 49.5)
-//			  {
-//				  ego_environment.ego_car_.ref_speed_ += 0.624;
-//
-//			  }
-//		  }
-
 
 		  ego_environment.generateObjectTrajectories();
 		  ego_environment.updateEgoState();
@@ -610,8 +582,8 @@ int main() {
 
 		  ego_environment.sensor_objects_.clear();
 
-          msgJson["next_x"] = ego_environment.ego_car_.ego_trajectories_[0].x_;
-          msgJson["next_y"] = ego_environment.ego_car_.ego_trajectories_[0].y_;
+          msgJson["next_x"] = ego_environment.ego_car_.ego_trajectories_[ego_environment.ego_car_.lane_].x_;
+          msgJson["next_y"] = ego_environment.ego_car_.ego_trajectories_[ego_environment.ego_car_.lane_].y_;
 
 
 
