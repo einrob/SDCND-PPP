@@ -75,7 +75,7 @@ public:
 
 };
 
-class EgoCar : private Trajectory
+class EgoCar
 {
 public:
 	EgoCar()
@@ -144,27 +144,37 @@ public:
 class Object : private Trajectory
 {
 public:
-	Object(int _id, int _lane, double _vx, double _vy, double _s_pos, unsigned int _timesteps) : Trajectory()
+	Object(int _id, double _x, double _y, double _vx, double _vy, double _s_pos, double _d_pos) : Trajectory()
 	{
 		id_ = _id;
-		lane_ = _lane;
+		x_ = _x;
+		y_ = _y;
 		vx_ = _vx;
 		vy_ = _vx;
 		s_pos_ = _s_pos;
+		d_pos_ =_d_pos;
+		lane_ = floor(d_pos_/4);
+		object_speed_ = sqrt(vx_*vx_+vy_*vy_);
+		car_future_s_ = 0;
 	};
 
-	void estimateTrajectory()
+	void estimateTrajectory(int timesteps)
 	{
-
+		 car_future_s_ = s_pos_; // current s position
+		car_future_s_+=((double)timesteps*0.02*object_speed_);
 	}
-
-private:
 
 	int id_;
 	int lane_;
 	double vx_;
 	double vy_;
 	double s_pos_;
+	double d_pos_;
+	double object_speed_;
+	double car_future_s_;
+
+	double x_;
+	double y_;
 };
 
 
@@ -183,6 +193,54 @@ public:
 		map_waypoints_s_  = _map_waypoints_s;
 		map_waypoints_dx_ = _map_waypoints_dx;
 		map_waypoints_dy_ = _map_waypoints_dy;
+	}
+
+	void updateEgoState()
+	{
+		bool too_close = false;
+
+		for(unsigned int i=0; i < sensor_objects_.size(); i++)
+		{
+
+			if(sensor_objects_[i].lane_ == ego_car_.lane_)
+			{
+
+				 // check s values grater than mine and s gap
+				 if((sensor_objects_[i].car_future_s_ > ego_car_.car_s_) && ((sensor_objects_[i].car_future_s_ - ego_car_.car_s_) < 30))
+				 {
+					 too_close = true;
+
+					 if(ego_car_.lane_ > 0)
+					 {
+						ego_car_.lane_ = 0;
+					 }
+
+				 }
+			}
+
+		}
+
+		  if(too_close)
+		  {
+			  ego_car_.ref_speed_ -= 0.624;
+		  }
+		  else
+		  {
+			  if(ego_car_.ref_speed_ < 49.5)
+			  {
+				  ego_car_.ref_speed_ += 0.624;
+
+			  }
+		  }
+
+	}
+
+	void generateObjectTrajectories()
+	{
+		for(unsigned int i=0; i < sensor_objects_.size(); i++)
+		{
+			sensor_objects_[i].estimateTrajectory(ego_car_.prev_path_size_);
+		}
 	}
 
 	void genererateEgoTrajectories()
@@ -448,6 +506,8 @@ int main() {
            *   sequentially every .02 seconds
            */
 
+          // Add Objects to new enviroment
+
 
 
 
@@ -457,9 +517,9 @@ int main() {
           double ref_vel; // m/s
           int prev_size = previous_path_x.size();
 
-		// Define the actual (x,y) points we will use for the planner
-		vector<double> next_x_vals;
-		vector<double> next_y_vals;
+		 // Define the actual (x,y) points we will use for the planner
+		 vector<double> next_x_vals;
+		 vector<double> next_y_vals;
 
           //TODO:
 
@@ -473,54 +533,73 @@ int main() {
 
 		  for(int i=0; i < sensor_fusion.size(); i++)
 		  {
-			  float d = sensor_fusion[i][6];
 
-			  // Check if car is im my lane
-			  if(d< (2+4*ego_environment.ego_car_.lane_+2) && d > (2+4*ego_environment.ego_car_.lane_-2))
-			  {
-				  double vx = sensor_fusion[i][3];
-				  double vy = sensor_fusion[i][4];
-				  double check_speed = sqrt(vx*vx+vy*vy);
-				  double check_car_s = sensor_fusion[i][5];
+//	          std::cout << "-------------- Sensor fusion size: " << sensor_fusion.size() << std::endl;
+//	          std::cout << "ID: " << sensor_fusion[i][0] << std::endl;
+//	          std::cout << "X: " << sensor_fusion[i][1] << std::endl;
+//	          std::cout << "Y: " << sensor_fusion[i][2] << std::endl;
+//	          std::cout << "VX: " << sensor_fusion[i][3] << std::endl;
+//	          std::cout << "VY: " << sensor_fusion[i][4] << std::endl;
+//	          std::cout << "S: " << sensor_fusion[i][5] << std::endl;
+//	          std::cout << "D: " << sensor_fusion[i][6] << std::endl << std::endl;
 
+			  Object tmp_sensor_object = Object(sensor_fusion[i][0],
+					  	  	  	       sensor_fusion[i][1],
+									   sensor_fusion[i][2],
+									   sensor_fusion[i][3],
+									   sensor_fusion[i][4],
+									   sensor_fusion[i][5],
+									   sensor_fusion[i][6]);
 
-
-				  check_car_s+=((double)prev_size*0.02*check_speed);
-
-				  // check s values grater than mine and s gap
-				  	 if((check_car_s > car_s) && ((check_car_s -car_s) < 30))
-				  	 {
-				  		 too_close = true;
-
-				  		 if(ego_environment.ego_car_.lane_ > 0)
-				  		 {
-				  			ego_environment.ego_car_.lane_ = 0;
-				  		 }
-
-				  	 }
-
-			  }
+			  ego_environment.sensor_objects_.push_back(tmp_sensor_object);
+//
+//			  float d = sensor_fusion[i][6];
+//
+//			  // Check if car is im my lane
+//			  if(d< (2+4*ego_environment.ego_car_.lane_+2) && d > (2+4*ego_environment.ego_car_.lane_-2))
+//			  {
+//				  double vx = sensor_fusion[i][3];
+//				  double vy = sensor_fusion[i][4];
+//				  double check_speed = sqrt(vx*vx+vy*vy);
+//				  double check_car_s = sensor_fusion[i][5];
+//
+//
+//
+//				  check_car_s+=((double)prev_size*0.02*check_speed);
+//
+//				  // check s values grater than mine and s gap
+//				  	 if((check_car_s > car_s) && ((check_car_s -car_s) < 30))
+//				  	 {
+//				  		 too_close = true;
+//
+//				  		 if(ego_environment.ego_car_.lane_ > 0)
+//				  		 {
+//				  			ego_environment.ego_car_.lane_ = 0;
+//				  		 }
+//
+//				  	 }
+//
+//
+//			  }
 		  }
 
-
-		  if(too_close)
-		  {
-			  ref_vel -= 0.624;
-		  }
-		  else
-		  {
-			  if(ref_vel < 49.5)
-			  {
-				  ref_vel += 0.624;
-
-			  }
-
-		  }
-
+//
+//		  if(too_close)
+//		  {
+//			  ego_environment.ego_car_.ref_speed_ -= 0.624;
+//		  }
+//		  else
+//		  {
+//			  if(ego_environment.ego_car_.ref_speed_ < 49.5)
+//			  {
+//				  ego_environment.ego_car_.ref_speed_ += 0.624;
+//
+//			  }
+//		  }
 
 
-
-
+		  ego_environment.generateObjectTrajectories();
+		  ego_environment.updateEgoState();
 
 		  ego_environment.ego_car_.setEgoCarSpeed(car_speed);
 		  ego_environment.ego_car_.setEgoPose(car_x, car_y, car_yaw);
@@ -529,157 +608,7 @@ int main() {
 		  ego_environment.genererateEgoTrajectories();
 
 
-
-
-
-//		 //-------------
-//
-//
-//
-//          vector<double> ptsx;
-//          vector<double> ptsy;
-//
-//          double ref_x = car_x;
-//          double ref_y = car_y;
-//          double ref_yaw = deg2rad(car_yaw);
-//
-//          if(prev_size < 2)
-//          {
-//        	  double prev_car_x = car_x - cos(car_yaw);
-//        	  double prev_car_y = car_y - sin(car_yaw);
-//
-//        	  ptsx.push_back(prev_car_x);
-//        	  ptsx.push_back(car_x);
-//
-//        	  ptsy.push_back(prev_car_y);
-//        	  ptsy.push_back(car_y);
-//          }
-//          else
-//          {
-//        	  ref_x = previous_path_x[prev_size-1];
-//        	  ref_y = previous_path_y[prev_size-1];
-//
-//        	  double ref_x_prev = previous_path_x[prev_size-2];
-//        	  double ref_y_prev = previous_path_y[prev_size-2];
-//
-//        	  ref_yaw = atan2(ref_y-ref_y_prev,ref_x-ref_x_prev);
-//
-//        	  ptsx.push_back(ref_x_prev);
-//        	  ptsx.push_back(ref_x);
-//
-//        	  ptsy.push_back(ref_y_prev);
-//        	  ptsy.push_back(ref_y);
-//          }
-//
-////          std::cout << "YAW: " << ref_yaw << std::endl;
-////          std::cout << "----- first two path points: " << std::endl;
-////          std::cout << "WP1 x:" << ptsx[0] << ", y: " << ptsy[0] <<std::endl;
-////          std::cout << "WP2 x:" << ptsx[1] << ", y: " << ptsy[1] <<std::endl;
-//
-//
-//
-//          // In Frenet add evenly 30m spaced points ahead of the starting reference
-//          vector<double> next_wp0 = getXY(car_s+30,(2+4*lane),map_waypoints_s, map_waypoints_x,map_waypoints_y);
-//          vector<double> next_wp1 = getXY(car_s+60,(2+4*lane),map_waypoints_s, map_waypoints_x,map_waypoints_y);
-//          vector<double> next_wp2 = getXY(car_s+90,(2+4*lane),map_waypoints_s, map_waypoints_x,map_waypoints_y);
-//
-////          std::cout << "----- Spline control points: " << std::endl;
-////          std::cout << next_wp0[0] << " " << next_wp0[1] << std::endl;
-////          std::cout << next_wp1[0] << " " << next_wp1[1] << std::endl;
-////          std::cout << next_wp2[0] << " " << next_wp2[1] << std::endl;
-//
-//
-//          ptsx.push_back(next_wp0[0]);
-//          ptsx.push_back(next_wp1[0]);
-//          ptsx.push_back(next_wp2[0]);
-//
-//          ptsy.push_back(next_wp0[1]);
-//          ptsy.push_back(next_wp1[1]);
-//          ptsy.push_back(next_wp2[1]);
-//
-////          std::cout << "Points transforrmed to CCS: " << std::endl;
-//
-//          for(int i=0; i < ptsx.size(); i++)
-//          {
-//        	  // shift car reference angel to 0 degrees
-//        	  double shift_x = ptsx[i]-ref_x;
-//        	  double shift_y = ptsy[i]-ref_y;
-//
-//        	  ptsx[i] = (shift_x * cos(0-ref_yaw)-shift_y*sin(0-ref_yaw));
-//        	  ptsy[i] = (shift_x * sin(0-ref_yaw)+shift_y*cos(0-ref_yaw));
-//
-// //       	  std::cout <<  "X: " << ptsx[i] << "," << ptsy[i] << std::endl;
-//
-//
-//          }
-//
-//          // create a spline
-//          tk::spline s;
-//
-//          // set (x,y) points to the spline
-//          s.set_points(ptsx,ptsy);
-//
-//
-////
-//          // Start with all of the previous path points from the last time
-//
-////          std::cout << "------ previous path points" << std::endl;
-//          for(int i=0; i < previous_path_x.size(); i++)
-//          {
-////        	  std::cout << "X: " << previous_path_x[i] << " Y: " <<previous_path_y[i] << std::endl;
-//        	  next_x_vals.push_back(previous_path_x[i]);
-//        	  next_y_vals.push_back(previous_path_y[i]);
-//          }
-//
-//          // Calculate how to break up spline points so that we travel at our desired reference velocity
-//
-//          double target_x = 30.0;
-//          double target_y = s(target_x);
-//          double target_dist = sqrt((target_x)*(target_x)+(target_y)*(target_y));
-//
-//          double x_add_on = 0;
-//
-//          // Fill up the rest of our path planner after filling it with prevous points, here we will alway output 50 points
-//
-//
-////          std::cout << "--------------- interpolating spline:" << std::endl;
-//          for(int i=1; i<=50-previous_path_x.size(); i++)
-//          {
-//        	  double N = (target_dist/(.02*(ref_vel/2.24)));
-//        	  double x_point = x_add_on+(target_x)/N;
-//        	  double y_point = s(x_point);
-//
-//
-////        	  std::cout << "X: " << x_point << " Y: " << y_point << std::endl;
-//
-//        	  x_add_on = x_point;
-//
-//        	  double x_ref = x_point;
-//        	  double y_ref = y_point;
-//
-//        	  x_point = (x_ref * cos(ref_yaw)-y_ref*sin(ref_yaw));
-//              y_point = (x_ref * sin(ref_yaw)+y_ref*cos(ref_yaw));
-//
-//              x_point = x_point + ref_x;
-//              y_point = y_point + ref_y;
-//
-//              next_x_vals.push_back(x_point);
-//              next_y_vals.push_back(y_point);
-//
-//          }
-//
-////          	  std::cout << "-------------------------------------------- next waypoints " << std::endl;
-////
-////          	 for(int i = 0; i<next_x_vals.size(); i++)
-////          	 {
-////          		 std::cout <<"X: " << next_x_vals[i] << " Y: "  << next_y_vals[i] << std::endl;
-////          	 }
-//
-//
-//
-
-
-
+		  ego_environment.sensor_objects_.clear();
 
           msgJson["next_x"] = ego_environment.ego_car_.ego_trajectories_[0].x_;
           msgJson["next_y"] = ego_environment.ego_car_.ego_trajectories_[0].y_;
