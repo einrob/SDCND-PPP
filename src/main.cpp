@@ -223,13 +223,24 @@ public:
 			// penalize lane changes -> so the car keeps the lane if nothing else is around
 			if(trajectory_lane_index != ego_car_.lane_)
 			{
-				ego_car_.ego_trajectories_[trajectory_lane_index].trajectory_cost_ += 5;
+				// Penalize double lane changes
+				if(abs(trajectory_lane_index - ego_car_.lane_)>1)
+				{
+					ego_car_.ego_trajectories_[trajectory_lane_index].trajectory_cost_ += 22.5;
+				}
+				else
+				{
+					ego_car_.ego_trajectories_[trajectory_lane_index].trajectory_cost_ += 2.5;
+				}
 
 				// Penalize lane changes even more, if lane change occured in the last interation
 				if(system_state_ == CHANE_RIGHT || system_state_ == CHANGE_LEFT)
 				{
 					ego_car_.ego_trajectories_[trajectory_lane_index].trajectory_cost_ += 10;
 				}
+
+
+
 			}
 
 			// Check each sesor object
@@ -239,7 +250,10 @@ public:
 				// if the sensor object is ahead of us on long sight
 				// Penalize changes into lanes with cars upcoming on the long run
 				// --> change into lane without an obstacle on the long run
-				if((sensor_objects_[i].object_future_s_ - ego_car_.car_planned_s_) >= 30 && (sensor_objects_[i].object_future_s_ - ego_car_.car_planned_s_) <= 80 && sensor_objects_[i].object_future_s_ > ego_car_.car_planned_s_)
+				if((sensor_objects_[i].object_future_s_ - ego_car_.car_planned_s_) >= 30
+					&& (sensor_objects_[i].object_future_s_ - ego_car_.car_planned_s_) <= 60
+					&& sensor_objects_[i].object_future_s_ > ego_car_.car_planned_s_
+					&& sensor_objects_[i].lane_ == trajectory_lane_index)
 				{
 					ego_car_.ego_trajectories_[trajectory_lane_index].trajectory_cost_ += 5;
 				}
@@ -248,7 +262,7 @@ public:
 				if(sensor_objects_[i].lane_ == trajectory_lane_index)
 				{
 					// some car is ahead of us in the lane somewhere
-					if((sensor_objects_[i].object_future_s_ > ego_car_.car_planned_s_) && (abs(sensor_objects_[i].object_future_s_ - ego_car_.car_planned_s_) < 30))
+					if((sensor_objects_[i].object_future_s_ > ego_car_.car_planned_s_) && (sensor_objects_[i].object_future_s_ - ego_car_.car_planned_s_) < 30)
 					 {
 						ego_car_.ego_trajectories_[trajectory_lane_index].trajectory_cost_ += 10;
 
@@ -258,6 +272,12 @@ public:
 							ego_car_.follow_object_speed_ = sensor_objects_[i].object_speed_;
 						}
 					 }
+				}
+
+				// Check for collision at current car pos +/- range
+				if(abs(sensor_objects_[i].s_pos_ - ego_car_.car_s_) < 10 && sensor_objects_[i].lane_ == trajectory_lane_index)
+				{
+					ego_car_.ego_trajectories_[trajectory_lane_index].trajectory_cost_ += 15;
 				}
 
 
@@ -356,6 +376,7 @@ public:
 
 		  ego_car_.ego_trajectories_.clear();
 
+		  double max_last_points = 0;
 
 		  // Generate 3 trajectories: keep_lane, change left, change right, or change right right/change left left
 		  for(int lane = 0; lane < 3; lane++)
@@ -385,6 +406,7 @@ public:
 			  }
 			  else
 			  {
+
 				  ref_x = ego_car_.prev_path_x_[ego_car_.prev_path_size_ -1];
 				  ref_y = ego_car_.prev_path_y_[ego_car_.prev_path_size_ -1];
 
@@ -444,6 +466,8 @@ public:
 				  ego_car_.ego_trajectories_[lane].x_.push_back(ego_car_.prev_path_x_[i]);
 				  ego_car_.ego_trajectories_[lane].y_.push_back(ego_car_.prev_path_y_[i]);
 			  }
+
+
 
 			  // Calculate how to break up spline points so that we travel at our desired reference velocity
 
