@@ -3,9 +3,6 @@
 #include <iostream>
 #include <string>
 #include <vector>
-#include "Eigen-3.3/Eigen/Core"
-#include "Eigen-3.3/Eigen/QR"
-#include "Eigen-3.3/Eigen/Dense"
 #include "helpers.h"
 #include "json.hpp"
 #include "spline.h"
@@ -17,8 +14,6 @@ using std::vector;
 
 
 using std::vector;
-using Eigen::MatrixXd;
-using Eigen::VectorXd;
 
 
 class Trajectory
@@ -276,6 +271,9 @@ public:
 				inhibit_action_counter_--;
 			}
 
+			// Because it was not possible to set the speed of the ego car properly to the preceding one
+			// I inhibit lane changes while car is decreasing speed - whith the current approach the car gets very slow sometimes
+			// In this situations a lane change sit not safe
 			if(inhibit_action_decreasing_speed_ == true)
 			{
 				if(trajectory_lane_index != ego_car_.lane_)
@@ -334,8 +332,14 @@ public:
 
 					std::cout << "ObjectID: " << sensor_objects_[i].id_ << " lane: " << sensor_objects_[i].lane_ << " ego lane " << ego_car_.lane_ << std::endl;
 
-					std::cout << "----------- TOOOOOOOO CLOOOOOSSSEEE " << std::endl;
+					std::cout << "----------- TO CLOSE -------------------- " << std::endl;
 					ego_car_.ego_trajectories_[trajectory_lane_index].trajectory_cost_ +=10;
+
+
+					std::cout <<" Follow Object speed mph: " << sensor_objects_[i].object_speed_mph_
+							<< " Follow Object speed mps: " << sensor_objects_[i].object_speed_mps_
+							<< " Speed from traveled distance: " << sensor_objects_[i].speed_from_traveled_distance_  << std::endl;
+
 
 					follow_car_ = true;
 				}
