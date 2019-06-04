@@ -287,7 +287,7 @@ public:
 			if(trajectory_lane_index != ego_car_.lane_)
 			{
 				// Penalize double lane changes
-				if(abs(trajectory_lane_index - ego_car_.lane_)>1)
+				if((trajectory_lane_index - ego_car_.lane_) > 1 || (trajectory_lane_index - ego_car_.lane_) < -1)
 				{
 					ego_car_.ego_trajectories_[trajectory_lane_index].trajectory_cost_ += 22.5;
 				}
