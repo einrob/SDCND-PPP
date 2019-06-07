@@ -154,11 +154,7 @@ public:
 		vy_ = _vx;
 		s_pos_ = _s_pos;
 		d_pos_ =_d_pos;
-
-
 		lane_ = floor(d_pos_/4);
-
-
 
 		object_speed_mps_ = (sqrt(vx_*vx_+vy_*vy_));
 		object_speed_mph_ = object_speed_mps_*2.236934; // mps to mph
@@ -178,9 +174,6 @@ public:
 			this->d_.push_back(d_pos_+((double)tstep*0.02*object_speed_mps_));
 			//std::cout << s_[tstep] << std::endl;
 		}
-
-
-
 	}
 
 	void setObjectData(double _x, double _y, double _vx, double _vy, double _s_pos, double _d_pos, double est_time_elapesed)
@@ -228,9 +221,6 @@ public:
 	double traveled_distance_;
 };
 
-
-
-
 class EgoPlanner
 {
 public:
@@ -249,19 +239,21 @@ public:
 		map_waypoints_dy_ = _map_waypoints_dy;
 		max_planning_timesteps_ = _max_planning_timesteps;
 		system_state_ = 0;
-		next_trajectory_ = 1; // WE know that car starts in lane 1 TODO: Change this
+		next_trajectory_ = 1; // WE know that car starts in lane 1 
 		sensor_objects_initialized_ = false;
 	}
 
 
 	void calculateCosts()
 	{
-
+        std::cout << "------------ Calculate Costs -----------" << std::endl; 
+      
 		for(unsigned trajectory_lane_index = 0; trajectory_lane_index < ego_car_.ego_trajectories_.size(); trajectory_lane_index++)
 		{
 			ego_car_.ego_trajectories_[trajectory_lane_index].trajectory_cost_ = 0;
 
-
+          	std::cout << "----------------- Trajectory Nr: "  << trajectory_lane_index << std::endl; 
+          
 			if(inhibit_action_counter_>0) // Inhibit lane
 			{
 				if(trajectory_lane_index != ego_car_.lane_)
@@ -271,25 +263,15 @@ public:
 				inhibit_action_counter_--;
 			}
 
-			// Because it was not possible to set the speed of the ego car properly to the preceding one
-			// I inhibit lane changes while car is decreasing speed - whith the current approach the car gets very slow sometimes
-			// In this situations a lane change sit not safe
-			if(inhibit_action_decreasing_speed_ == true)
-			{
-				if(trajectory_lane_index != ego_car_.lane_)
-				{
-					ego_car_.ego_trajectories_[trajectory_lane_index].trajectory_cost_ += 100;
-				}
-			}
-
-			// penalize lane changes
+          // penalize lane changes
 
 			if(trajectory_lane_index != ego_car_.lane_)
 			{
 				// Penalize double lane changes
-				if((trajectory_lane_index - ego_car_.lane_) > 1 || (trajectory_lane_index - ego_car_.lane_) < -1)
+				if(((double)trajectory_lane_index - ego_car_.lane_) > 1 || ((double)trajectory_lane_index - ego_car_.lane_) < -1)
 				{
-					ego_car_.ego_trajectories_[trajectory_lane_index].trajectory_cost_ += 22.5;
+                  //std::cout << ">>>> lane to change " << (double)trajectory_lane_index - ego_car_.lane_ << std::endl; 
+					ego_car_.ego_trajectories_[trajectory_lane_index].trajectory_cost_ += 100;
 				}
 				else
 				{
@@ -302,158 +284,121 @@ public:
 					ego_car_.ego_trajectories_[trajectory_lane_index].trajectory_cost_ += 10;
 				}
 			}
-
-
-			// First search for objects in the ego lane
-			// sort it according to their s value
-			// only calculate cost for the nearest object
-
+          
 
 			for(unsigned int i=0; i < sensor_objects_.size(); i++)
 			{
+           
+              // CHecking Cars Infront of the current ego car position 
+			if(trajectory_lane_index == sensor_objects_[i].lane_ // if the object is in the analysed trajectory 
+               && sensor_objects_[i].object_future_s_ > ego_car_.car_s_ // cars future is in front of ego car 
+               && sensor_objects_[i].s_pos_ > ego_car_.car_s_ // car is infront of us
+               && sensor_objects_[i].object_future_s_ < (ego_car_.car_planned_s_ + 50)  // and it is not too far in the future
+               ) 
+            {
+              // Some car is infront of the ego car along the trajectory 			
+			  ego_car_.ego_trajectories_[trajectory_lane_index].trajectory_cost_ +=8.4;
+              
+              // Cars which are to close in the current analysed trajectory if they in the ego lane
+               if(sensor_objects_[i].lane_ != ego_car_.lane_
+                  && (sensor_objects_[i].object_future_s_ - ego_car_.car_planned_s_) < 30) // If the car in our lane is too close 
+               {
+                     ego_car_.ego_trajectories_[trajectory_lane_index].trajectory_cost_ += 15;
+               }
+              
+              
+              // Checking if the car is in the ego lane 
+              if(sensor_objects_[i].lane_ == ego_car_.lane_ // if objects is in ego-car lane
+               && trajectory_lane_index == ego_car_.lane_) // if planned trajectory is in the ego-car lane --> Keep Lane 
+              {
+                std::cout << "INFRONT: "
+                      << " ego car spos: " << ego_car_.car_s_ 
+                      <<  " object spos: " << sensor_objects_[i].s_pos_ 
+                      << " diff: " << sensor_objects_[i].s_pos_ - ego_car_.car_s_ 
+                      << " -- "
+                      << " ego car spos: " << ego_car_.car_planned_s_ 
+                      << " object future spos: " << sensor_objects_[i].object_future_s_
+                      << " diff: " << sensor_objects_[i].object_future_s_ - ego_car_.car_planned_s_ 
+                      << " -- " 
+                      << "obj mps: " << sensor_objects_[i].object_speed_mps_
+                      << "obj mhp: " << sensor_objects_[i].object_speed_mph_  
 
-				if(sensor_objects_[i].object_future_s_ > ego_car_.car_s_           // check if the sensor object is infront of the car
-				  && sensor_objects_[i].object_future_s_ < (ego_car_.car_planned_s_ + 100)  // and it is not too far in the future
-				  && (sensor_objects_[i].object_future_s_ - ego_car_.car_planned_s_) < 60
-				  && (sensor_objects_[i].object_future_s_ - ego_car_.car_planned_s_) > 0
-				  && sensor_objects_[i].lane_ == trajectory_lane_index)  // and if the car is in the planned trajectory
-				{
+                      << std::endl;
+                        
+                
+                
+                if((sensor_objects_[i].object_future_s_ - ego_car_.car_planned_s_) < 30) // If the car in our lane is too close 
+                {
+                    std::cout  << " diff: " << sensor_objects_[i].object_future_s_ - ego_car_.car_planned_s_  << std::endl; 
 
-					ego_car_.ego_trajectories_[trajectory_lane_index].trajectory_cost_ +=8.4;
+                   speed_scaler_ = 1 - (((sensor_objects_[i].object_future_s_ - ego_car_.car_planned_s_)-20) / (30 - 20)) ;
+                  std::cout << " Speed scaler  --- " << speed_scaler_ << std::endl;
 
-				}
+                  std::cout << "----------- TOO CLOSE --- " << sensor_objects_[i].object_future_s_ - ego_car_.car_planned_s_ << std::endl;
+                  follow_car_ = true;
 
+                  ego_car_.ego_trajectories_[trajectory_lane_index].trajectory_cost_ += 15;
+                }
+              }
+                
+            
+            }
+              
+                // CHecking Cars behind of the current ego car position 
+			if(trajectory_lane_index == sensor_objects_[i].lane_ // if the object is in the analysed trajectory 
+               && sensor_objects_[i].lane_ != ego_car_.lane_ // Only check objects which are not in the ego lane coming from behind 
+               && sensor_objects_[i].s_pos_ < ego_car_.car_s_ // car is behind us
+               && sensor_objects_[i].object_future_s_ > (ego_car_.car_s_ - 50)  // and it is not too far in the future
+               ) 
+            {
+              
+              		if((sensor_objects_[i].object_future_s_ - ego_car_.car_planned_s_)>-40)
+                    {
+               			ego_car_.ego_trajectories_[trajectory_lane_index].trajectory_cost_ += 15;
+                      
+                      
+					  std::cout << "BEHIND: "
+                      << " ego car spos: " << ego_car_.car_s_ 
+                      <<  " object spos: " << sensor_objects_[i].s_pos_ 
+                      << " diff: " << sensor_objects_[i].s_pos_ - ego_car_.car_s_ 
+                      << " -- "
+                      << " ego car spos: " << ego_car_.car_planned_s_ 
+                      << " object future spos: " << sensor_objects_[i].object_future_s_
+                      << " diff: " << sensor_objects_[i].object_future_s_ - ego_car_.car_planned_s_ 
+                      << " -- " 
+                      << "obj mps: " << sensor_objects_[i].object_speed_mps_
+                      << "obj mhp: " << sensor_objects_[i].object_speed_mph_  
 
-				// Collision check
-				if(sensor_objects_[i].lane_ == ego_car_.lane_ &&
-				   sensor_objects_[i].object_future_s_ > ego_car_.car_s_
-				   && (sensor_objects_[i].object_future_s_ - ego_car_.car_planned_s_) < 20)
-				{
+                      << std::endl;
+                    }  
+              
+                // Check for collision at current car pos +/- range left and right from car
+                  if((sensor_objects_[i].s_pos_ - ego_car_.car_s_) < 20
+                      && (sensor_objects_[i].s_pos_ - ego_car_.car_s_) > -20
+                      && sensor_objects_[i].lane_ == trajectory_lane_index
+                      && ego_car_.lane_ != trajectory_lane_index)
+                  {
+                    
+                     std::cout << "ATHEIGHT: "
+                      << " ego car spos: " << ego_car_.car_s_ 
+                      <<  " object spos: " << sensor_objects_[i].s_pos_ 
+                      << " diff: " << sensor_objects_[i].s_pos_ - ego_car_.car_s_ 
+                      << " -- "
+                      << " ego car spos: " << ego_car_.car_planned_s_ 
+                      << " object future spos: " << sensor_objects_[i].object_future_s_
+                      << " diff: " << sensor_objects_[i].object_future_s_ - ego_car_.car_planned_s_ 
+                      << " -- " 
+                      << "obj mps: " << sensor_objects_[i].object_speed_mps_
+                      << "obj mhp: " << sensor_objects_[i].object_speed_mph_  
 
-					std::cout << "ObjectID: " << sensor_objects_[i].id_ << " lane: " << sensor_objects_[i].lane_ << " ego lane " << ego_car_.lane_ << std::endl;
-
-					std::cout << "----------- TO CLOSE -------------------- " << std::endl;
-					ego_car_.ego_trajectories_[trajectory_lane_index].trajectory_cost_ +=10;
-
-
-					std::cout <<" Follow Object speed mph: " << sensor_objects_[i].object_speed_mph_
-							<< " Follow Object speed mps: " << sensor_objects_[i].object_speed_mps_
-							<< " Speed from traveled distance: " << sensor_objects_[i].speed_from_traveled_distance_  << std::endl;
-
-
-					follow_car_ = true;
-				}
-
-
-
-
-				// Check for collision at current car pos +/- range left and right from car
-				if((sensor_objects_[i].s_pos_ - ego_car_.car_s_) < 20
-					&& (sensor_objects_[i].s_pos_ - ego_car_.car_s_) > -20
-					&& sensor_objects_[i].lane_ == trajectory_lane_index
-					&& ego_car_.lane_ != trajectory_lane_index)
-				{
-					std::cout << "object spos: " << sensor_objects_[i].s_pos_ << " ego car spos: " << ego_car_.car_s_ << " diff: " << sensor_objects_[i].s_pos_ - ego_car_.car_s_ << std::endl;
-
-					ego_car_.ego_trajectories_[trajectory_lane_index].trajectory_cost_ += 15;
-				}
-
-			}
+                      << std::endl;
+                      
+                      ego_car_.ego_trajectories_[trajectory_lane_index].trajectory_cost_ += 15;
+                  }
+            
+            }
+     		}
 		}
-
-
-
-//			// penalize lane changes -> so the car keeps the lane if nothing else is around
-//			if(trajectory_lane_index != ego_car_.lane_)
-//			{
-//				// Penalize double lane changes
-//				if(abs(trajectory_lane_index - ego_car_.lane_)>1)
-//				{
-//					ego_car_.ego_trajectories_[trajectory_lane_index].trajectory_cost_ += 22.5;
-//				}
-//				else
-//				{
-//					ego_car_.ego_trajectories_[trajectory_lane_index].trajectory_cost_ += 2.5;
-//				}
-//
-//				// Penalize lane changes even more, if lane change occured in the last interation
-//				if(system_state_ == CHANGE_RIGHT || system_state_ == CHANGE_LEFT)
-//				{
-//					ego_car_.ego_trajectories_[trajectory_lane_index].trajectory_cost_ += 10;
-//				}
-//			}
-//
-//			// Check each sesor object
-//			for(unsigned int i=0; i < sensor_objects_.size(); i++)
-//			{
-//
-//				// if the sensor object is ahead of us on long sight
-//				// Penalize changes into lanes with cars upcoming on the long run
-//				// --> change into lane without an obstacle on the long run
-//				if((sensor_objects_[i].object_future_s_ - ego_car_.car_planned_s_) >= 30
-//					&& (sensor_objects_[i].object_future_s_ - ego_car_.car_planned_s_) <= 60
-//					&& sensor_objects_[i].object_future_s_ > ego_car_.car_planned_s_
-//					&& sensor_objects_[i].lane_ == trajectory_lane_index)
-//				{
-//					ego_car_.ego_trajectories_[trajectory_lane_index].trajectory_cost_ += 5;
-//				}
-//
-//				// if the sensor object is in the same lane
-//				if(sensor_objects_[i].lane_ == trajectory_lane_index)
-//				{
-//					// some car is ahead of us in the lane somewhere
-//					if((sensor_objects_[i].object_future_s_ > ego_car_.car_s_)
-//						&& (sensor_objects_[i].object_future_s_ - ego_car_.car_planned_s_) < 30
-//						&& sensor_objects_[i].s_pos_ > ego_car_.car_s_)
-//					 {
-//						ego_car_.ego_trajectories_[trajectory_lane_index].trajectory_cost_ += 10;
-//
-//						if(ego_car_.lane_ == trajectory_lane_index)
-//						{
-//							follow_car_ = true;
-//							ego_car_.follow_object_speed_ = sensor_objects_[i].object_speed_mph_;
-//
-//							std::cout <<" Follow Object speed mph: " << sensor_objects_[i].object_speed_mph_
-//									<< " Follow Object speed mps: " << sensor_objects_[i].object_speed_mps_
-//									<< " Speed from traveled distance: " << sensor_objects_[i].speed_from_traveled_distance_  << std::endl;
-//
-//						}
-//					 }
-//				}
-//
-//
-//
-//				// Check for collision at current car pos +/- range left and right from car
-//				if((sensor_objects_[i].s_pos_ - ego_car_.car_s_) < 10
-//					&& sensor_objects_[i].lane_ == trajectory_lane_index
-//					&& ego_car_.lane_ != trajectory_lane_index)
-//				{
-//					ego_car_.ego_trajectories_[trajectory_lane_index].trajectory_cost_ += 15;
-//				}
-
-
-
-//				if(sensor_objects_[i].lane_ == ego_car_.lane_)
-//				{
-//
-//
-//					 // check s values grater than mine and s gap
-//					 if((sensor_objects_[i].object_future_s_ > ego_car_.car_s_) && ((sensor_objects_[i].object_future_s_ - ego_car_.car_s_) < 30))
-//					 {
-//						 too_close = true;
-//
-//						 if(ego_car_.lane_ > 0)
-//						 {
-//							ego_car_.lane_ = 0;
-//						 }
-//
-//					 }
-//				}
-
-//			}
-//		}
-
-
 	}
 
 	void updateEgoState()
@@ -462,9 +407,9 @@ public:
 		follow_car_ = false;
 
 		// Check Ego Car lane
-		std::cout << "------------ Ego Car lane: " << ego_car_.lane_ << std::endl;
+		//std::cout << "------------ Ego Car lane: " << ego_car_.lane_ << std::endl;
 		tmp_lane_ = floor(ego_car_.car_d_/4);
-		std::cout << "-------- Car lane index:  " << tmp_lane_ << std::endl;
+		//std::cout << "-------- Car lane index:  " << tmp_lane_ << std::endl;
 
 		//Is the car at the moment in a
 		if(system_state_ == CHANGE_RIGHT || system_state_ == CHANGE_LEFT)
@@ -479,21 +424,19 @@ public:
 		}
 		else
 		{
-
-
-
 			calculateCosts();
 
-
+          
+          
 			double min_const = 999;
 
 			for(unsigned trajectory_lane_index = 0; trajectory_lane_index < ego_car_.ego_trajectories_.size(); trajectory_lane_index++)
 			{
-				std::cout << "Trajectory cost lane " << trajectory_lane_index << " : " << ego_car_.ego_trajectories_[trajectory_lane_index].trajectory_cost_ << std::endl;
+				std::cout << "Trajectory cost lane " << trajectory_lane_index << " : " << 					ego_car_.ego_trajectories_[trajectory_lane_index].trajectory_cost_ << std::endl;
 
 				if(min_const > ego_car_.ego_trajectories_[trajectory_lane_index].trajectory_cost_)
 				{
-					//TODO:
+					//TODO UNCOMMENT:
 					next_trajectory_ = trajectory_lane_index;
 
 					min_const = ego_car_.ego_trajectories_[trajectory_lane_index].trajectory_cost_;
@@ -511,14 +454,14 @@ public:
 			{
 				system_state_ = CHANGE_LEFT;
 				std::cout << ">>>>> Lane change left" << std::endl;
-				inhibit_action_counter_ = 50;
+				inhibit_action_counter_ = 150;
 			}
 
 			if(ego_car_.lane_ < next_trajectory_)
 			{
 				system_state_= CHANGE_RIGHT;
 				std::cout << ">>>>> Lane change right" << std::endl;
-				inhibit_action_counter_ = 50;
+				inhibit_action_counter_ = 150;
 			}
 
 			std::cout << "Minimum trajectory costs: " << min_const <<  " Next trajectory: " <<  next_trajectory_ << std::endl;
@@ -529,18 +472,21 @@ public:
 
 			  if(follow_car_ == true)// && ego_car_.car_speed_ > ego_car_.follow_object_speed_)
 			  {
-				  ego_car_.target_speed_ -= 2.0;
-				  inhibit_action_decreasing_speed_ = true;
-	//			  if(ego_car_.target_speed_< ego_car_.follow_object_speed_)
-	//			  {
-	//				  ego_car_.target_speed_ = ego_car_.follow_object_speed_;
-	//			  }
+                
+ 				if(ego_car_.target_speed_> 3.0)
+				  {
+				 	 ego_car_.target_speed_ -= (0.8 * speed_scaler_);
+				  }
+				if(ego_car_.target_speed_< 20.0)
+                {
+                	inhibit_action_decreasing_speed_ = true;
+                }
 			  }
 			  else
 			  {
 				  if(ego_car_.car_speed_ < speed_limits[ego_car_.lane_] && follow_car_ == false)
 				  {
-					  ego_car_.target_speed_ += 2.0;
+					  ego_car_.target_speed_ += 0.8;
 					  inhibit_action_decreasing_speed_ = false;
 					  if(ego_car_.target_speed_> speed_limits[ego_car_.lane_])
 					  {
@@ -549,10 +495,6 @@ public:
 				  }
 			  }
 		}
-
-		  // TODO: UNCOMMENT
-		  //ego_car_.lane_ = next_trajectory_;
-
 	}
 
 	void generateObjectTrajectories(unsigned int elapsed_time_steps)
@@ -595,12 +537,14 @@ public:
 			  // --> This keeps the trajectory smooth
 
 
-			  std::cout << "Prev path size: " << ego_car_.prev_path_size_ << std::endl;
+			  //std::cout << "Prev path size: " << ego_car_.prev_path_size_ << std::endl;
 
 			  if(ego_car_.prev_path_size_ < 2)
 			  {
-				  double prev_car_x = ego_car_.car_x_ - cos(ego_car_.car_yaw_);
-				  double prev_car_y = ego_car_.car_y_ - sin(ego_car_.car_yaw_);
+				  double prev_car_x = ego_car_.car_x_ - cos(deg2rad(ego_car_.car_yaw_));
+				  double prev_car_y = ego_car_.car_y_ - sin(deg2rad(ego_car_.car_yaw_));
+                
+                  std::cout << "CAR INITIAL YAW: " <<  deg2rad(ego_car_.car_yaw_)<< std::endl; 
 
 				  control_points_x.push_back(prev_car_x);
 				  control_points_x.push_back(ego_car_.car_x_);
@@ -651,30 +595,16 @@ public:
 
 			  }
 
-			  // create a spline
-			  //tk::spline s;
-
-
-			  // set (x,y) points to the spline
-	//		  std::cout << "Num control poijnts: " << control_points_x.size() << std::endl;
-
 			  ego_car_.ego_trajectories_[lane].sp_.set_points(control_points_x, control_points_y);
 
-			  //s.set_points(ptsx,ptsy);
-
-	//          std::cout << "------ previous path points" << std::endl;
 			  for(int i=0; i < ego_car_.prev_path_size_; i++)
 			  {
-	//        	  std::cout << "X: " << previous_path_x[i] << " Y: " <<previous_path_y[i] << std::endl;
-
+				  //std::cout << "X: " << previous_path_x[i] << " Y: " <<previous_path_y[i] << std::endl;
 				  ego_car_.ego_trajectories_[lane].x_.push_back(ego_car_.prev_path_x_[i]);
 				  ego_car_.ego_trajectories_[lane].y_.push_back(ego_car_.prev_path_y_[i]);
 			  }
 
-
-
 			  // Calculate how to break up spline points so that we travel at our desired reference velocity
-
 			  double target_x = 30.0;
 			  double target_y = ego_car_.ego_trajectories_[lane].sp_(target_x);
 			  double target_dist = sqrt((target_x)*(target_x)+(target_y)*(target_y));
@@ -683,15 +613,11 @@ public:
 
 			  // Fill up the rest of our path planner after filling it with prevous points, here we will alway output 50 points
 
-	  //        std::cout << "--------------- interpolating spline:" << std::endl;
 			  for(int i=1; i<=max_planning_timesteps_-ego_car_.prev_path_size_; i++)
 			  {
 				  double N = (target_dist/(.02*(ego_car_.target_speed_/2.24)));
 				  double x_point = x_add_on+(target_x)/N;
 				  double y_point = ego_car_.ego_trajectories_[lane].sp_(x_point);
-
-
-	  //      	  std::cout << "X: " << x_point << " Y: " << y_point << std::endl;
 
 				  x_add_on = x_point;
 
@@ -704,7 +630,6 @@ public:
 				  x_point = x_point + ref_x;
 				  y_point = y_point + ref_y;
 
-
 				  ego_car_.ego_trajectories_[lane].x_.push_back(x_point);
 				  ego_car_.ego_trajectories_[lane].y_.push_back(y_point);
 			  }
@@ -716,24 +641,19 @@ public:
 			  double yaw_trajectory_end = atan2(ego_car_.ego_trajectories_[lane].y_.rbegin()[0]-ego_car_.ego_trajectories_[lane].y_.rbegin()[1],
 							  	  	  	  	  	ego_car_.ego_trajectories_[lane].x_.rbegin()[0]-ego_car_.ego_trajectories_[lane].x_.rbegin()[1]);
 
-
-
-
-			//  std::cout << "car_prev_planned_s: " << ego_car_.car_planned_s_ << std::endl;
-			  	// TODO:
-
+              // Calculate real ego car position after calculating the missing points of full plan trajectory 
 			  vector<double> sd;
-
-			  sd  = getFrenet(ego_car_.ego_trajectories_[lane].x_.rbegin()[0],  ego_car_.ego_trajectories_[lane].y_.rbegin()[0], yaw_trajectory_end, map_waypoints_x_,map_waypoints_y_);
+			  // Get tuple from getFrenet
+			  sd  = getFrenet(ego_car_.ego_trajectories_[lane].x_.rbegin()[0],  
+                    ego_car_.ego_trajectories_[lane].y_.rbegin()[0], 
+                    yaw_trajectory_end, map_waypoints_x_,map_waypoints_y_);
 
 			//  std::cout << "NEW car_prev_planned_s: " << sd[0] << "   yaw: " << yaw_trajectory_end << std::endl;
 			  ego_car_.car_planned_s_ = sd[0];
 
-
 			  control_points_x.clear();
 			  control_points_y.clear();
 		  }
-
 	}
 
 	vector<Object> sensor_objects_;
@@ -748,6 +668,7 @@ public:
 	bool follow_car_;
 	double inhibit_action_counter_;
 	double inhibit_action_decreasing_speed_;
+	double speed_scaler_;
 
 	enum
 	{
@@ -763,15 +684,10 @@ private:
 	vector<double> map_waypoints_s_;
 	vector<double> map_waypoints_dx_;
 	vector<double> map_waypoints_dy_;
-
-
-
 };
 
-
-
-
-int main() {
+int main() 
+{
   uWS::Hub h;
 
   // Load up map values for waypoint's x,y,s and d normalized normal vectors
@@ -782,12 +698,13 @@ int main() {
   vector<double> map_waypoints_dy;
 
   // Waypoint map to read from
-  string map_file_ = "./data/highway_map.csv";
+  string map_file_ = "../data/highway_map.csv"; // On local system accessed by ./data/highway_map.csv
   // The max s value before wrapping around the track back to 0
   double max_s = 6945.554;
 
   std::ifstream in_map_(map_file_.c_str(), std::ifstream::in);
 
+  // On my local system I needed to check if the file was found 
   if (in_map_.is_open()) {
 	  std::cout << "Opened file" << std::endl;
   }
@@ -813,11 +730,6 @@ int main() {
     iss >> d_x;
     iss >> d_y;
 
-//    std::cout << x << std::endl;
-//    std::cout << y << std::endl;
-//    std::cout << s << std::endl;
-//
-
     map_waypoints_x.push_back(x);
     map_waypoints_y.push_back(y);
     map_waypoints_s.push_back(s);
@@ -825,10 +737,11 @@ int main() {
     map_waypoints_dy.push_back(d_y);
   }
 
-
+ // Initializing EgoPlanner Environment 
   EgoPlanner ego_environment(map_waypoints_x, map_waypoints_y, map_waypoints_s, map_waypoints_dx, map_waypoints_dy, 50);
   ego_environment.ego_car_.setEgoLane(1); // We know that we start in lane 1
-  ego_environment.ego_car_.target_speed_ = 0.624;
+  ego_environment.ego_car_.target_speed_ = 0.624; // Set small initial target speed
+  // If there where speed limits for different lane we could utilize this vector 
   ego_environment.speed_limits.push_back(45.5); // lane 0
   ego_environment.speed_limits.push_back(45.5); // lane 1
   ego_environment.speed_limits.push_back(45.5); // lane 2
@@ -876,21 +789,11 @@ int main() {
 
           json msgJson;
 
-          /**
-           * TODO: define a path made up of (x,y) points that the car will visit
-           *   sequentially every .02 seconds
-           */
-
-          // Add Objects to new enviroment
-
-
 		 // Define the actual (x,y) points we will use for the planner
 		 vector<double> next_x_vals;
 		 vector<double> next_y_vals;
 
 		 double car_planned_s;
-
-          //TODO:
 
 		  if(previous_path_x.size() > 0)
 		  {
@@ -917,10 +820,6 @@ int main() {
 //	          std::cout << "S: " << sensor_fusion[i][5] << std::endl;
 //	          std::cout << "D: " << sensor_fusion[i][6] << std::endl << std::endl;
 
-
-
-//			  if(ego_environment.sensor_objects_initialized_ == false)
-//			  {
 				  Object tmp_sensor_object = Object(sensor_fusion[i][0],
 				  					  	  	  	       sensor_fusion[i][1],
 				  									   sensor_fusion[i][2],
@@ -930,38 +829,6 @@ int main() {
 				  									   sensor_fusion[i][6]);
 
 				  ego_environment.sensor_objects_.push_back(tmp_sensor_object);
-//			  }
-//			  else
-//			  {
-//				  // There are always 12 objects transmitted without changing order and ID
-//				  // This does not work with real sensor fusion data where IDs jump and number of objects is constantly changeing
-//
-//					  ego_environment.sensor_objects_[i].setObjectData( sensor_fusion[i][1],
-//																	   sensor_fusion[i][2],
-//																	   sensor_fusion[i][3],
-//																	   sensor_fusion[i][4],
-//																	   sensor_fusion[i][5],
-//																	   sensor_fusion[i][6],
-//																	   estimated_timesteps_elapsed);
-//
-//					  std::cout << "------- Object: " << std::endl;
-//					  std::cout << "ID: " << ego_environment.sensor_objects_[i].id_ << std::endl;
-//					  std::cout << "Lane: " << ego_environment.sensor_objects_[i].lane_ << std::endl;
-//					  std::cout << "spos: " << ego_environment.sensor_objects_[i].s_pos_ << std::endl;
-//					  std::cout << "dpos: " << ego_environment.sensor_objects_[i].d_pos_ << std::endl;
-//					  std::cout << "x: " << ego_environment.sensor_objects_[i].x_ << std::endl;
-//					  std::cout << "y: " << ego_environment.sensor_objects_[i].y_ << std::endl;
-//					  std::cout << "vx: " << ego_environment.sensor_objects_[i].vx_ << std::endl;
-//					  std::cout << "vy: " << ego_environment.sensor_objects_[i].vy_ << std::endl;
-//					  std::cout << "predicted v: " << ego_environment.sensor_objects_[i].speed_from_traveled_distance_ << std::endl;
-//					  std::cout << "Speed mph: " << ego_environment.sensor_objects_[i].object_speed_mph_ << std::endl;
-//					  std::cout << "Speed mps: " << ego_environment.sensor_objects_[i].object_speed_mps_ << std::endl;
-//
-//
-//
-//			  }
-
-
 
 		  }
 		  ego_environment.sensor_objects_initialized_ = true; // after first run
@@ -988,7 +855,6 @@ int main() {
           msgJson["next_y"] = ego_environment.ego_car_.ego_trajectories_[ego_environment.next_trajectory_].y_;
 
           std::cout <<"-----------------------------------------"<< std::endl;
-
 
           auto msg = "42[\"control\","+ msgJson.dump()+"]";
 
